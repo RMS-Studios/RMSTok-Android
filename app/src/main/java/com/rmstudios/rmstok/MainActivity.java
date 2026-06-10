@@ -2,12 +2,15 @@ package com.rmstudios.rmstok;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -48,12 +51,15 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER = 8485;
 
     // Settings bridge: there's no chrome.storage in a WebView, so we implement the
-    // RMSTok content-script protocol (tiktokmod:getSettings/saveSettings/getVersion)
-    // over localStorage. Injected before the bundle so the store is ready on boot.
+    // RMSTok content-script protocol (tiktokmod:getSettings/saveSettings/getVersion).
+    // Storage is backed by the native RMSTokNative interface (SharedPreferences) so it
+    // reliably persists across reloads/restarts, with localStorage as a fallback.
+    // Injected before the bundle so the store is ready on boot.
     private static final String BRIDGE_JS =
             "(function(){'use strict';var K='rmstok_settings';" +
-            "function load(){try{return JSON.parse(localStorage.getItem(K)||'{}');}catch(e){return {};}}" +
-            "function save(p){var c=load();for(var k in p)c[k]=p[k];try{localStorage.setItem(K,JSON.stringify(c));}catch(e){}}" +
+            "function load(){try{var s=(window.RMSTokNative&&RMSTokNative.getSettings())||localStorage.getItem(K)||'{}';return JSON.parse(s);}catch(e){return {};}}" +
+            "function save(p){var c=load();for(var k in p)c[k]=p[k];var j=JSON.stringify(c);" +
+            "try{if(window.RMSTokNative){RMSTokNative.saveSettings(j);}else{localStorage.setItem(K,j);}}catch(e){}}" +
             "window.addEventListener('message',function(e){" +
             "if(!e.data||!e.data.type)return;" + // no source check: WebView same-window source is often null
             "switch(e.data.type){" +
@@ -61,6 +67,22 @@ public class MainActivity extends Activity {
             "case 'tiktokmod:saveSettings':if(e.data.settings&&typeof e.data.settings==='object')save(e.data.settings);break;" +
             "case 'tiktokmod:getVersion':window.postMessage({type:'tiktokmod:version',version:'2.0.0'},'*');break;}});" +
             "})();";
+
+    /** Native storage exposed to the page as window.RMSTokNative (backed by SharedPreferences). */
+    public static final class RMSTokNative {
+        private final SharedPreferences prefs;
+        RMSTokNative(Context ctx) {
+            prefs = ctx.getSharedPreferences("rmstok", Context.MODE_PRIVATE);
+        }
+        @JavascriptInterface
+        public String getSettings() {
+            return prefs.getString("settings", "{}");
+        }
+        @JavascriptInterface
+        public void saveSettings(String json) {
+            prefs.edit().putString("settings", json).apply();
+        }
+    }
 
     private WebView wv;
     private final Client client = new Client();
@@ -82,6 +104,9 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setUserAgentString(DESKTOP_UA);
+
+        // Native settings storage for the page-side bridge (persists via SharedPreferences).
+        wv.addJavascriptInterface(new RMSTokNative(this), "RMSTokNative");
 
         wv.setWebChromeClient(new WebChromeClient() {
             @Override
