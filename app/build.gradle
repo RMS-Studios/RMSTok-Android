@@ -16,6 +16,22 @@ android {
         versionName "1.0"
     }
 
+    // Release signing — credentials come from env vars (CI) or -P properties.
+    // When absent (e.g. a contributor without the keystore), the release build is
+    // simply left unsigned instead of failing.
+    def cfg = { name -> System.getenv(name) ?: project.findProperty(name) }
+    def keystorePath = cfg("RMSTOK_KEYSTORE")
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword cfg("RMSTOK_STORE_PASSWORD")
+                keyAlias cfg("RMSTOK_KEY_ALIAS")
+                keyPassword cfg("RMSTOK_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".dbg"
@@ -23,6 +39,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePath) signingConfig signingConfigs.release
         }
     }
     compileOptions {
