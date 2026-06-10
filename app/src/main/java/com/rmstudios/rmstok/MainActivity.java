@@ -56,14 +56,20 @@ public class MainActivity extends Activity {
     // reliably persists across reloads/restarts, with localStorage as a fallback.
     // Injected before the bundle so the store is ready on boot.
     private static final String BRIDGE_JS =
-            "(function(){'use strict';var K='rmstok_settings';" +
-            "function load(){try{var s=(window.RMSTokNative&&RMSTokNative.getSettings())||localStorage.getItem(K)||'{}';return JSON.parse(s);}catch(e){return {};}}" +
-            "function save(p){var c=load();for(var k in p)c[k]=p[k];var j=JSON.stringify(c);" +
-            "try{if(window.RMSTokNative){RMSTokNative.saveSettings(j);}else{localStorage.setItem(K,j);}}catch(e){}}" +
+            "(function(){'use strict';" +
+            "if(window.__rmstokBridge)return;window.__rmstokBridge=1;" +
+            "var K='rmstok_settings';" +
+            "function read(){var s=null;try{if(window.RMSTokNative)s=RMSTokNative.getSettings();}catch(e){}" +
+            "if(!s||s==='{}'){try{s=localStorage.getItem(K);}catch(e){}}" +
+            "try{return JSON.parse(s||'{}');}catch(e){return {};}}" +
+            "function write(o){var j=JSON.stringify(o);" +
+            "try{if(window.RMSTokNative)RMSTokNative.saveSettings(j);}catch(e){}" +
+            "try{localStorage.setItem(K,j);}catch(e){}}" +
+            "function save(p){var c=read();for(var k in p)c[k]=p[k];write(c);}" +
             "window.addEventListener('message',function(e){" +
             "if(!e.data||!e.data.type)return;" + // no source check: WebView same-window source is often null
             "switch(e.data.type){" +
-            "case 'tiktokmod:getSettings':window.postMessage({type:'tiktokmod:settings',settings:load()},'*');break;" +
+            "case 'tiktokmod:getSettings':window.postMessage({type:'tiktokmod:settings',settings:read()},'*');break;" +
             "case 'tiktokmod:saveSettings':if(e.data.settings&&typeof e.data.settings==='object')save(e.data.settings);break;" +
             "case 'tiktokmod:getVersion':window.postMessage({type:'tiktokmod:version',version:'2.0.0'},'*');break;}});" +
             "})();";
@@ -221,14 +227,28 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        /**
+         * Inject the settings bridge + the RMSTok bundle as ONE blob, bridge first, so the
+         * bridge's message listener is guaranteed to be live in the exact JS context where the
+         * bundle runs loadSettings(). Both halves are guarded so injecting at multiple page
+         * events (started/finished) is idempotent within a context.
+         */
+        private void inject(WebView view) {
+            String js = BRIDGE_JS;
+            if (runtime != null) {
+                js += "\nif(!window.__rmstokRuntime){window.__rmstokRuntime=1;\n" + runtime + "\n}";
+            }
+            view.evaluateJavascript(js, null);
+        }
+
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
-            view.evaluateJavascript(BRIDGE_JS, null);
-            if (runtime != null) view.evaluateJavascript(runtime, null);
+            inject(view);
         }
 
         @Override
         public void onPageFinished(WebView view, String url) {
+            inject(view); // belt-and-suspenders: ensure a live bridge in the final context
             // Inject browser.css as a stylesheet link (CSP is stripped below so it loads).
             view.evaluateJavascript(
                 "(function(){if(!document.getElementById('rmstok-css')){" +
