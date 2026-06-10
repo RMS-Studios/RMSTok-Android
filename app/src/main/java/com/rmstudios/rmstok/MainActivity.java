@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
             "function load(){try{return JSON.parse(localStorage.getItem(K)||'{}');}catch(e){return {};}}" +
             "function save(p){var c=load();for(var k in p)c[k]=p[k];try{localStorage.setItem(K,JSON.stringify(c));}catch(e){}}" +
             "window.addEventListener('message',function(e){" +
-            "if(e.source!==window||!e.data||!e.data.type)return;" +
+            "if(!e.data||!e.data.type)return;" + // no source check: WebView same-window source is often null
             "switch(e.data.type){" +
             "case 'tiktokmod:getSettings':window.postMessage({type:'tiktokmod:settings',settings:load()},'*');break;" +
             "case 'tiktokmod:saveSettings':if(e.data.settings&&typeof e.data.settings==='object')save(e.data.settings);break;" +
