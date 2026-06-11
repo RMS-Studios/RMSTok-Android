@@ -136,11 +136,11 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK && wv != null) {
-            // Close the RMSTok panel if open; else go back in history; else exit.
+            // Close the RMSTok overlay if open; else go back in history; else exit.
             wv.evaluateJavascript(
-                "(function(){var m=document.getElementById('tmod-mount');" +
-                "if(m&&m.style.display!=='none'){var o=document.querySelector('[class*=\"DivNavItem\"]:not(#tmod-nav-item)');" +
-                "if(o){o.click();return true;}}return false;})()",
+                "(function(){var o=document.getElementById('tmod-overlay');" +
+                "if(o&&o.style.display!=='none'){var c=o.querySelector('.tmod-overlay-close');" +
+                "if(c){c.click();return true;}}return false;})()",
                 value -> {
                     if (!"true".equals(value)) {
                         if (wv.canGoBack()) wv.goBack();
