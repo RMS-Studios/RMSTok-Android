@@ -2,10 +2,12 @@ package com.rmstudios.rmstok;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Message;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.CookieManager;
@@ -51,6 +53,7 @@ public class MainActivity extends Activity {
     private WebView wv;
     private final Client client = new Client();
     @Nullable private ValueCallback<Uri[]> filePathCallback;
+    @Nullable private Dialog popupDialog;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -76,6 +79,9 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setUserAgentString(DESKTOP_UA);
+        // Allow OAuth/login popups (e.g. "Continue with Google") to open.
+        s.setSupportMultipleWindows(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
 
         wv.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -88,6 +94,14 @@ public class MainActivity extends Activity {
                     filePathCallback = null;
                     return false;
                 }
+                return true;
+            }
+
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
+                // Show login/OAuth popups in their own WebView dialog (keeps the
+                // window.opener relationship so the provider can post the result back).
+                openPopup(resultMsg);
                 return true;
             }
         });
@@ -119,6 +133,45 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         CookieManager.getInstance().flush(); // persist the session to disk
+    }
+
+    /** Show an OAuth/login popup window in its own WebView dialog. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void openPopup(Message resultMsg) {
+        WebView popup = new WebView(this);
+        var ps = popup.getSettings();
+        ps.setJavaScriptEnabled(true);
+        ps.setDomStorageEnabled(true);
+        ps.setSupportMultipleWindows(true);
+        ps.setJavaScriptCanOpenWindowsAutomatically(true);
+        ps.setUserAgentString(DESKTOP_UA);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true);
+        popup.setWebViewClient(new WebViewClient());
+        popup.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onCloseWindow(WebView w) { dismissPopup(); }
+        });
+
+        Dialog dialog = new Dialog(this);
+        dialog.setContentView(popup);
+        dialog.setOnDismissListener(d -> {
+            try { popup.destroy(); } catch (Exception ignored) {}
+            popupDialog = null;
+            CookieManager.getInstance().flush();
+        });
+        dialog.show();
+        popupDialog = dialog;
+
+        WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
+        transport.setWebView(popup);
+        resultMsg.sendToTarget();
+    }
+
+    private void dismissPopup() {
+        if (popupDialog != null) {
+            try { popupDialog.dismiss(); } catch (Exception ignored) {}
+            popupDialog = null;
+        }
     }
 
     private String resolveStartUrl(Intent intent) {
