@@ -8,10 +8,10 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
@@ -23,8 +23,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * RMSTok Android client.
@@ -63,9 +61,17 @@ public class MainActivity extends Activity {
 
         wv = findViewById(R.id.webview);
 
+        // Persist the TikTok login session. Cookies are stored to disk by the WebView's
+        // CookieManager; we accept third-party cookies (TikTok login touches several
+        // subdomains) and flush on pause so the session survives app restarts.
+        CookieManager cookies = CookieManager.getInstance();
+        cookies.setAcceptCookie(true);
+        cookies.setAcceptThirdPartyCookies(wv, true);
+
         var s = wv.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
@@ -88,17 +94,18 @@ public class MainActivity extends Activity {
 
         final String startUrl = resolveStartUrl(getIntent());
 
-        // Fetch the bundle off the main thread, then start TikTok.
+        // Fetch the bundle (JS + CSS) off the main thread, then start TikTok.
         new Thread(() -> {
-            String js = null;
-            try {
-                js = httpGet(JS_URL);
-            } catch (IOException ex) {
-                Log.e(TAG, "Failed to fetch browser.js", ex);
-            }
-            final String runtime = js;
+            String js = null, css = null;
+            try { js = httpGet(JS_URL); }
+            catch (IOException ex) { Log.e(TAG, "Failed to fetch browser.js", ex); }
+            try { css = httpGet(CSS_URL); }
+            catch (IOException ex) { Log.e(TAG, "Failed to fetch browser.css", ex); }
+
+            final String runtime = js, styles = css;
             runOnUiThread(() -> {
                 client.runtime = runtime;
+                client.css = styles;
                 wv.setWebViewClient(client);
                 if (runtime == null) {
                     Toast.makeText(this, "RMSTok: couldn't load the mod bundle (is the release public?)", Toast.LENGTH_LONG).show();
@@ -106,6 +113,12 @@ public class MainActivity extends Activity {
                 wv.loadUrl(startUrl);
             });
         }).start();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        CookieManager.getInstance().flush(); // persist the session to disk
     }
 
     private String resolveStartUrl(Intent intent) {
@@ -167,9 +180,10 @@ public class MainActivity extends Activity {
         filePathCallback = null;
     }
 
-    // ─── WebViewClient: inject the bundle + strip CSP ────────────────────────────
+    // ─── WebViewClient: inject the bundle (JS bypasses CSP via evaluateJavascript) ──
     private final class Client extends WebViewClient {
         @Nullable String runtime;
+        @Nullable String css;
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -199,55 +213,16 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             inject(view); // safety net in case the page-start context was discarded
-            // Inject browser.css as a stylesheet link (CSP is stripped below so it loads).
-            view.evaluateJavascript(
-                "(function(){if(!document.getElementById('rmstok-css')){" +
-                "var l=document.createElement('link');l.id='rmstok-css';l.rel='stylesheet';l.type='text/css';" +
-                "l.href='" + CSS_URL + "';document.documentElement.appendChild(l);}})()", null);
+            // Inject browser.css inline as a <style> (avoids a cross-origin <link>, so we
+            // don't need to strip CSP — which would have bypassed the cookie jar).
+            if (css != null) {
+                String escaped = css.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$");
+                view.evaluateJavascript(
+                    "(function(){var e=document.getElementById('rmstok-css')||document.createElement('style');" +
+                    "e.id='rmstok-css';e.textContent=`" + escaped + "`;" +
+                    "if(!e.parentNode)document.documentElement.appendChild(e);})()", null);
+            }
             super.onPageFinished(view, url);
-        }
-
-        @Nullable
-        @Override
-        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
-            var path = req.getUrl().getPath();
-            boolean isCss = path != null && path.endsWith(".css");
-            if (req.isForMainFrame() || isCss) {
-                try {
-                    return fetchStripped(req);
-                } catch (IOException ex) {
-                    Log.e(TAG, "intercept failed", ex);
-                }
-            }
-            return null;
-        }
-
-        /** Re-fetch a request, dropping the Content-Security-Policy header so injection works. */
-        private WebResourceResponse fetchStripped(WebResourceRequest req) throws IOException {
-            var conn = (HttpURLConnection) new URL(req.getUrl().toString()).openConnection();
-            conn.setRequestMethod(req.getMethod());
-            conn.setInstanceFollowRedirects(true);
-            for (var h : req.getRequestHeaders().entrySet()) {
-                conn.setRequestProperty(h.getKey(), h.getValue());
-            }
-            int code = conn.getResponseCode();
-            String msg = conn.getResponseMessage();
-            if (msg == null || msg.isEmpty()) msg = "OK";
-
-            Map<String, String> headers = new HashMap<>();
-            for (var e : conn.getHeaderFields().entrySet()) {
-                if (e.getKey() == null) continue;
-                if ("content-security-policy".equalsIgnoreCase(e.getKey())) continue;
-                if ("content-security-policy-report-only".equalsIgnoreCase(e.getKey())) continue;
-                if (e.getValue() != null && !e.getValue().isEmpty()) headers.put(e.getKey(), e.getValue().get(0));
-            }
-            String contentType = conn.getContentType();
-            if (req.getUrl().toString().endsWith(".css")) contentType = "text/css";
-            if (contentType == null) contentType = "application/octet-stream";
-            // Strip any charset for the WebResourceResponse mime arg.
-            String mime = contentType.split(";")[0].trim();
-
-            return new WebResourceResponse(mime, "utf-8", code, msg, headers, conn.getInputStream());
         }
     }
 
