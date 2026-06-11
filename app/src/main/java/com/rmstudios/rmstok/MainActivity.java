@@ -39,9 +39,12 @@ public class MainActivity extends Activity {
     private static final String CSS_URL = "https://github.com/RMS-Studios/RMSTok/releases/download/devbuild/browser.css";
 
     private static final String HOME = "https://www.tiktok.com/";
-    // Desktop UA so TikTok serves the desktop layout the mod targets.
-    private static final String DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    // A real mobile Chrome UA (no "wv" WebView marker, and matching the actual device).
+    // A spoofed *desktop* UA on a mobile device causes a fingerprint mismatch that makes
+    // TikTok's login security reject sign-ins ("max attempts"). The settings UI is a
+    // layout-independent overlay, so the mobile layout is fine.
+    private static final String UA =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
 
     private static final int FILE_CHOOSER = 8485;
 
@@ -75,7 +78,7 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
-        s.setUserAgentString(DESKTOP_UA);
+        s.setUserAgentString(UA);
 
         wv.setWebChromeClient(new WebChromeClient() {
             @Override
